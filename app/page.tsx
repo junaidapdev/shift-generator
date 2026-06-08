@@ -293,77 +293,129 @@ declare const XLSX: any;
 declare const JSZip: any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const saveAs: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const jspdf: any;
 
-/* ── Excel styles ── */
-const STYLE_YELLOW_BOLD = {
-  fill: { fgColor: { rgb: "FFFF00" } },
-  font: { bold: true },
-};
-const STYLE_YELLOW_BOLD_CENTER = {
-  fill: { fgColor: { rgb: "FFFF00" } },
-  font: { bold: true, sz: 14 },
-  alignment: { horizontal: "center", vertical: "center" },
-};
-const STYLE_HEADER = {
-  fill: { fgColor: { rgb: "2C2C2A" } },
-  font: { bold: true, color: { rgb: "FFFFFF" } },
-  alignment: { horizontal: "center", vertical: "center" },
-};
-const STYLE_OFFDAY = {
-  fill: { fgColor: { rgb: "FFFF00" } },
-  font: { bold: false },
-};
+/* ── Letterhead loader (cached once per generate run) ── */
+async function loadLetterheadAsBase64(): Promise<string> {
+  const res = await fetch("/kayan-letterhead.png");
+  if (!res.ok) throw new Error(`Letterhead fetch failed: ${res.status}`);
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
-function generateExcel(
+/* ── PDF generator (one PDF per employee) ──
+   Layout: A4 portrait. Letterhead painted full-bleed as page background.
+   Content lives in the white middle region — y ≈ 38mm to ≈ 268mm — which
+   easily holds the metadata block + 31-row table on one page. */
+function generatePDF(
   employee: Employee,
   dateRange: DateEntry[],
   monthName: string,
-  year: number
-) {
-  const aoa: (string | number)[][] = [];
-  aoa.push(["KAYAN SWEETS TIME SCHEDULE", "", "", "", "", ""]);
-  aoa.push(["BRANCH", employee.branch, "", "", monthName.toUpperCase(), year]);
-  aoa.push(["NAME:", employee.name, "", "", "DEPARTMENT", ""]);
-  aoa.push(["ID NUMBER", employee.employeeId, "", "", employee.department, ""]);
-  aoa.push(["DATE", "IN", "OUT", "DUTY TIME", "SIGNATURE", "REMARKS"]);
+  year: number,
+  letterheadBase64: string
+): string {
+  const { jsPDF } = jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
 
-  for (const d of dateRange) {
+  // Full-bleed letterhead background
+  doc.addImage(letterheadBase64, "PNG", 0, 0, 210, 297);
+
+  // Subtitle (centered, just below the yellow top band)
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(30, 30, 30);
+  doc.text(
+    `Employee Time Schedule — ${monthName} ${year}`,
+    105,
+    40,
+    { align: "center" }
+  );
+
+  // Two-column metadata block
+  const metaLeftLabelX = 15;
+  const metaLeftValueX = 42;
+  const metaRightLabelX = 115;
+  const metaRightValueX = 152;
+  let metaY = 52;
+
+  const drawMetaRow = (
+    label1: string, value1: string,
+    label2: string, value2: string
+  ) => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.text(label1, metaLeftLabelX, metaY);
+    doc.text(label2, metaRightLabelX, metaY);
+    doc.setFont("helvetica", "normal");
+    doc.text(value1, metaLeftValueX, metaY);
+    doc.text(value2, metaRightValueX, metaY);
+    metaY += 6.5;
+  };
+
+  drawMetaRow("BRANCH:", employee.branch, "DEPARTMENT:", employee.department);
+  drawMetaRow("NAME:", employee.name, "OFF DAY:", employee.offDay);
+  drawMetaRow("ID NUMBER:", employee.employeeId, "DUTY TIME:", employee.dutyTime);
+
+  // Schedule table
+  const tableBody = dateRange.map((d) => {
     const off = isOffDay(d.dayName, employee.offDay);
-    if (off) {
-      aoa.push([d.formatted, "DAY OFF", "DAY OFF", "DAY OFF", "", ""]);
-    } else {
-      aoa.push([d.formatted, "", "", employee.dutyTime, "", ""]);
-    }
-  }
+    return off
+      ? [d.formatted, "DAY OFF", "DAY OFF", "DAY OFF", "", ""]
+      : [d.formatted, "", "", employee.dutyTime, "", ""];
+  });
 
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
-  ws["!cols"] = [
-    { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 22 }, { wch: 15 }, { wch: 15 },
-  ];
-
-  const totalRows = aoa.length;
-  for (let r = 0; r < totalRows; r++) {
-    for (let c = 0; c < 6; c++) {
-      const cellRef = XLSX.utils.encode_cell({ r, c });
-      if (!ws[cellRef]) ws[cellRef] = { v: "", t: "s" };
-
-      if (r === 0) ws[cellRef].s = STYLE_YELLOW_BOLD_CENTER;
-      else if (r <= 3) ws[cellRef].s = STYLE_YELLOW_BOLD;
-      else if (r === 4) ws[cellRef].s = STYLE_HEADER;
-      else {
-        const dateIdx = r - 5;
-        if (isOffDay(dateRange[dateIdx].dayName, employee.offDay)) {
-          ws[cellRef].s = STYLE_OFFDAY;
-        }
+  doc.autoTable({
+    startY: metaY + 4,
+    head: [["DATE", "IN", "OUT", "DUTY TIME", "SIGNATURE", "REMARKS"]],
+    body: tableBody,
+    theme: "grid",
+    headStyles: {
+      fillColor: [44, 44, 42],
+      textColor: 255,
+      fontStyle: "bold",
+      halign: "center",
+      fontSize: 9,
+      cellPadding: 1.6,
+    },
+    bodyStyles: {
+      fontSize: 8,
+      cellPadding: 1.2,
+      halign: "center",
+      valign: "middle",
+      textColor: [30, 30, 30],
+      lineColor: [180, 180, 180],
+      lineWidth: 0.1,
+    },
+    columnStyles: {
+      0: { cellWidth: 26 },
+      1: { cellWidth: 22 },
+      2: { cellWidth: 22 },
+      3: { cellWidth: 36 },
+      4: { cellWidth: 40 },
+      5: { cellWidth: 34 },
+    },
+    margin: { left: 15, right: 15, bottom: 30 },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (data: any) => {
+      if (data.section !== "body") return;
+      const rowIdx = data.row.index;
+      if (rowIdx < dateRange.length && isOffDay(dateRange[rowIdx].dayName, employee.offDay)) {
+        data.cell.styles.fillColor = [255, 255, 0];
+        data.cell.styles.lineColor = [0, 0, 0];
+        data.cell.styles.lineWidth = 0.18;
+        data.cell.styles.fontStyle = "bold";
       }
-    }
-  }
+    },
+  });
 
-  const wb = XLSX.utils.book_new();
-  const safeMonth = monthName.charAt(0) + monthName.slice(1).toLowerCase();
-  XLSX.utils.book_append_sheet(wb, ws, `${safeMonth} ${year}`);
-  return wb;
+  // Return base64 (no data-uri prefix) — JSZip wants raw base64
+  return doc.output("datauristring").split(",")[1];
 }
 
 /* ═══════════════════════════════════════════════════
@@ -831,6 +883,22 @@ Rules:
     const scheduleYear = startObj.getFullYear();
 
     setGenerating(true);
+    setStatus({ type: "active", message: "Loading letterhead..." });
+
+    // Load the Kayan Al-Nasser letterhead once — reused as the background for every PDF
+    let letterheadBase64: string;
+    try {
+      letterheadBase64 = await loadLetterheadAsBase64();
+    } catch (err) {
+      console.error("Failed to load letterhead:", err);
+      setGenerating(false);
+      setStatus({
+        type: "error",
+        message: "Could not load letterhead image. Make sure public/kayan-letterhead.png exists.",
+      });
+      return;
+    }
+
     setStatus({ type: "active", message: `Generating… 0 / ${employees.length}` });
 
     const zip = new JSZip();
@@ -840,13 +908,11 @@ Rules:
     for (let i = 0; i < employees.length; i++) {
       const emp = employees[i];
       try {
-        const wb = generateExcel(emp, dateRange, scheduleMonth, scheduleYear);
-        // FIX: Export strictly as base64 to avoid binary array corruption in JSZip
-        const base64Excel = XLSX.write(wb, { bookType: "xlsx", type: "base64" });
-        const filename = emp.name.replace(/\s+/g, "_") + "_" + scheduleMonth + scheduleYear + ".xlsx";
-        
+        const base64PDF = generatePDF(emp, dateRange, scheduleMonth, scheduleYear, letterheadBase64);
+        const filename = emp.name.replace(/\s+/g, "_") + "_" + scheduleMonth + scheduleYear + ".pdf";
+
         // Tell JSZip to decode the base64 string
-        zip.file(filename, base64Excel, { base64: true });
+        zip.file(filename, base64PDF, { base64: true });
         successCount++;
       } catch (err) {
         console.error(`Failed to generate for ${emp.name}:`, err);

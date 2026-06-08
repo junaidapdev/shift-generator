@@ -24,12 +24,12 @@ export default function RootLayout({
       <body>
         {children}
 
-        {/* xlsx-js-style (SheetJS fork with full cell styling) */}
+        {/* xlsx-js-style (SheetJS fork with full cell styling) — used by Salary Calculator export */}
         <Script
           src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"
           strategy="beforeInteractive"
         />
-        {/* JSZip */}
+        {/* JSZip — used to bundle per-employee PDFs */}
         <Script
           src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
           strategy="beforeInteractive"
@@ -37,6 +37,16 @@ export default function RootLayout({
         {/* FileSaver.js */}
         <Script
           src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"
+          strategy="beforeInteractive"
+        />
+        {/* jsPDF — schedule PDF generation. MUST load before jspdf-autotable. */}
+        <Script
+          src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"
+          strategy="beforeInteractive"
+        />
+        {/* jspdf-autotable — table plugin for jsPDF */}
+        <Script
+          src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"
           strategy="beforeInteractive"
         />
       </body>
