@@ -3,6 +3,109 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 
 /* ── Types ── */
+export interface ExtractedRow {
+  date: string;
+  scheduledIn: string;
+  scheduledOut: string;
+  actualIn: string;
+  actualOut: string;
+  dayOff: boolean;
+  absent: boolean;
+}
+
+export interface EmployeeSummary {
+  employee: Employee;
+  rows: (ExtractedRow & { lateMinutes: number | null, deduction: number, hoursWorked: number, hourlyRate: number })[];
+  totalLateMinutes: number;
+  totalDeduction: number;
+  grossSalary: number;
+  netSalary: number;
+  hourlyRate: number;
+}
+
+export function parseTimeStr(timeStr: string): number | null {
+  if (!timeStr) return null;
+  const match = timeStr.toLowerCase().match(/^(\d+):(\d+)\s*(am|pm)$/);
+  if (!match) return null;
+  const [, hStr, mStr, period] = match;
+  let h = parseInt(hStr, 10);
+  const m = parseInt(mStr, 10);
+  
+  if (h === 12) {
+    h = period === "am" ? 0 : 12;
+  } else if (period === "pm") {
+    h += 12;
+  }
+  return h * 60 + m;
+}
+
+export function getShiftHours(scheduledInStr: string, scheduledOutStr: string): number {
+  const inMinutes = parseTimeStr(scheduledInStr);
+  const outMinutes = parseTimeStr(scheduledOutStr);
+  if (inMinutes === null || outMinutes === null) return 8; // fallback
+  
+  let diff = outMinutes - inMinutes;
+  if (diff < 0) {
+    diff += 1440; // overnight
+  }
+  return diff / 60;
+}
+
+export function calcLateMinutes(scheduledInStr: string, actualInStr: string): null | number {
+  if (!actualInStr) return null; // absent
+  const sched = parseTimeStr(scheduledInStr);
+  const actual = parseTimeStr(actualInStr);
+  if (sched === null || actual === null) return null;
+  const late = actual - sched;
+  return Math.max(0, late);
+}
+
+export function calcDayDeduction(lateMinutes: number, hourlyRate: number): number {
+  const ded = (lateMinutes / 60) * hourlyRate;
+  return Math.round(ded * 100) / 100;
+}
+
+export function calcEmployeeSummary(employee: Employee, extractedRows: ExtractedRow[]) {
+  const monthlySalary = employee.monthlySalary || 3000;
+  
+  const workingRows = extractedRows.filter(r => !r.dayOff && !r.absent);
+  const shiftHoursList = workingRows.map(r => getShiftHours(r.scheduledIn, r.scheduledOut));
+  const avgShiftHours = shiftHoursList.length > 0 
+    ? shiftHoursList.reduce((a, b) => a + b, 0) / shiftHoursList.length 
+    : 8;
+
+  const hourlyRate = monthlySalary / 30 / avgShiftHours;
+
+  let totalLateMinutes = 0;
+  let totalDeduction = 0;
+
+  const detailedRows = extractedRows.map(row => {
+    if (row.dayOff || row.absent) {
+      return { ...row, lateMinutes: null, deduction: 0, hoursWorked: 0, hourlyRate };
+    }
+    
+    const lateMinutes = calcLateMinutes(row.scheduledIn, row.actualIn) ?? 0;
+    const deduction = calcDayDeduction(lateMinutes, hourlyRate);
+    const shiftHours = getShiftHours(row.scheduledIn, row.scheduledOut);
+    const actualLength = Math.max(0, shiftHours - (lateMinutes / 60));
+
+    totalLateMinutes += lateMinutes;
+    totalDeduction += deduction;
+
+    return { ...row, lateMinutes, deduction, hoursWorked: actualLength, hourlyRate };
+  });
+
+  return {
+    employee,
+    rows: detailedRows,
+    totalLateMinutes,
+    totalDeduction,
+    grossSalary: monthlySalary,
+    netSalary: monthlySalary - totalDeduction,
+    hourlyRate
+  };
+}
+
 interface Employee {
   name: string;
   employeeId: string;
@@ -11,6 +114,7 @@ interface Employee {
   dutyTime: string;
   offDay: string;
   email: string;
+  monthlySalary?: number;
 }
 
 interface ParseResult {
@@ -148,8 +252,24 @@ function getDateRange(startDateStr: string): DateEntry[] {
   return entries;
 }
 
+/**
+ * An employee's OffDay field may list one or two days, separated by
+ * "&", "and", or ",". Examples:
+ *   "Tuesday"
+ *   "Tuesday & Friday"
+ *   "Tuesday and Friday"
+ *   "Tuesday, Friday"
+ */
+function parseOffDays(employeeOffDay: string): string[] {
+  return employeeOffDay
+    .split(/\s*(?:&|,|\band\b)\s*/i)
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function isOffDay(dayName: string, employeeOffDay: string): boolean {
-  return dayName.toLowerCase() === employeeOffDay.toLowerCase();
+  const target = dayName.trim().toLowerCase();
+  return parseOffDays(employeeOffDay).includes(target);
 }
 
 /* ── Nearest upcoming 21st ── */
@@ -284,6 +404,19 @@ export default function Home() {
   }
 
   /* ── App state ── */
+  const [activeTab, setActiveTab] = useState<"generate" | "salary">("generate");
+  const [salaryEmployeeId, setSalaryEmployeeId] = useState("");
+  const [attendanceImage, setAttendanceImage] = useState<File | null>(null);
+  const [attendancePreviewUrl, setAttendancePreviewUrl] = useState("");
+  const [extractedRows, setExtractedRows] = useState<ExtractedRow[]>([]);
+  const [currentResult, setCurrentResult] = useState<EmployeeSummary | null>(null);
+  const [processedResults, setProcessedResults] = useState<EmployeeSummary[]>([]);
+  const [readingImage, setReadingImage] = useState(false);
+  const [salaryStatus, setSalaryStatus] = useState<{
+    type: "idle" | "active" | "error" | "success";
+    message: string;
+  }>({ type: "idle", message: "Waiting for photo and employee selection..." });
+
   const [file, setFile] = useState<File | null>(null);
   const [startDate, setStartDate] = useState(getNearest21st());
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -378,6 +511,313 @@ export default function Home() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
+  function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = e.target.files?.[0] || null;
+    setAttendanceImage(selected);
+    if (selected) {
+      const url = URL.createObjectURL(selected);
+      setAttendancePreviewUrl(url);
+    } else {
+      setAttendancePreviewUrl("");
+    }
+  }
+
+  function handleRowEdit(index: number, field: "actualIn" | "actualOut", value: string) {
+    const newRows = [...extractedRows];
+    newRows[index] = { ...newRows[index], [field]: value.trim() };
+    setExtractedRows(newRows);
+    
+    const selectedEmp = employees.find(e => e.employeeId === salaryEmployeeId);
+    if (selectedEmp) {
+      const result = calcEmployeeSummary(selectedEmp, newRows);
+      setCurrentResult(result);
+      setProcessedResults(prev => {
+        const copy = [...prev];
+        const existingIdx = copy.findIndex(r => r.employee.employeeId === result.employee.employeeId);
+        if (existingIdx !== -1) copy[existingIdx] = result;
+        else copy.push(result);
+        return copy;
+      });
+    }
+  }
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleReadSheet() {
+    if (!attendanceImage || !salaryEmployeeId) return;
+
+    setReadingImage(true);
+    setSalaryStatus({ type: "active", message: "Reading sheet with AI... This usually takes 10-20 seconds." });
+
+    const selectedEmp = employees.find(e => e.employeeId === salaryEmployeeId);
+    const dutyTimeStr = selectedEmp ? selectedEmp.dutyTime : "Unknown";
+
+    try {
+      const base64DataURL = await fileToBase64(attendanceImage);
+      const OPENAI_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+
+      const promptText = `This is a filled employee time schedule sheet for a retail company.
+The sheet covers dates from the 21st of one month to the 20th of the next.
+The shift is an evening/night shift. Times in the IN column are afternoon/evening 
+(e.g. "5:30" means 5:30pm, "4:30" means 4:30pm). Times in the OUT column 
+are late night or early morning (e.g. "1:30" means 1:30am, "12:30" means 12:30am).
+
+IMPORTANT: The duty time row may change partway through the sheet 
+(e.g. first half shows "5:00pm to 1:00am", second half shows "4:30pm to 12:30am").
+Read the DUTY TIME column for each row to know the scheduled times for that day.
+(Employee's default duty time is: ${dutyTimeStr})
+
+Extract every date row. Return ONLY a valid JSON array, no explanation, 
+no markdown backticks, nothing else.
+
+Format for each row:
+{
+  "date": "21-08-25",
+  "scheduledIn": "5:00pm",
+  "scheduledOut": "1:00am",
+  "actualIn": "5:30pm",
+  "actualOut": "1:30am",
+  "dayOff": false,
+  "absent": false
+}
+
+Rules:
+- Yellow highlighted rows = day off. Set dayOff: true, leave actualIn/actualOut as ""
+- Rows with a dash "—" or completely blank IN/OUT = absent. Set absent: true, 
+  leave actualIn/actualOut as ""
+- For IN times: if the number is between 1 and 8, it is pm (afternoon start).
+  If OUT time is between 12 and 2, it is am (past midnight).
+- Read the scheduledIn/scheduledOut from the DUTY TIME column of that specific row
+- Preserve exact times as written — do not round or correct them
+- Include every date row you can see, in chronological order`;
+
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          max_tokens: 4096,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: base64DataURL,
+                    detail: "high"
+                  }
+                },
+                {
+                  type: "text",
+                  text: promptText
+                }
+              ]
+            }
+          ]
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error?.message || "OpenAI API Error");
+      }
+
+      const text = data.choices[0].message.content.trim();
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        let cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+        const start = cleaned.indexOf('[');
+        const end = cleaned.lastIndexOf(']');
+        if (start !== -1 && end !== -1 && end > start) {
+           cleaned = cleaned.substring(start, end + 1);
+        }
+        parsed = JSON.parse(cleaned);
+      }
+
+      const rows: ExtractedRow[] = parsed;
+      
+      const workingDays = rows.filter(r => !r.dayOff && !r.absent).length;
+      const dayOffs = rows.filter(r => r.dayOff).length;
+      const absents = rows.filter(r => r.absent).length;
+
+      setExtractedRows(rows);
+      
+      const result = selectedEmp ? calcEmployeeSummary(selectedEmp, rows) : null;
+      setCurrentResult(result);
+
+      if (result) {
+        setProcessedResults(prev => {
+          const copy = [...prev];
+          const existingIdx = copy.findIndex(r => r.employee.employeeId === result.employee.employeeId);
+          if (existingIdx !== -1) copy[existingIdx] = result;
+          else copy.push(result);
+          return copy;
+        });
+      }
+
+      setSalaryStatus({ 
+        type: "success", 
+        message: `Read ${rows.length} rows — ${workingDays} working days, ${dayOffs} day-offs, ${absents} absent` 
+      });
+
+    } catch (err) {
+      console.error("AI Read Error:", err);
+      setSalaryStatus({ 
+        type: "error", 
+        message: "Could not read the sheet clearly. Try a better-lit photo taken straight-on." 
+      });
+    } finally {
+      setReadingImage(false);
+    }
+  }
+
+  async function handleExportSalaryReport() {
+    if (processedResults.length === 0) return;
+    setSalaryStatus({ type: "active", message: "Building salary report Excel file..." });
+
+    try {
+      const wb = XLSX.utils.book_new();
+
+      // Sheet 1: Summary
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const summaryAoA: any[][] = [];
+      summaryAoA.push(["Summary Report", "", "", "", "", "", ""]);
+      summaryAoA.push(["NAME", "BRANCH", "DEPARTMENT", "GROSS (SAR)", "DEDUCTIONS (SAR)", "NET SALARY (SAR)", "TOTAL LATE (min)"]);
+      
+      let grandDeductions = 0;
+      for (const pr of processedResults) {
+        summaryAoA.push([
+          pr.employee.name,
+          pr.employee.branch,
+          pr.employee.department,
+          pr.grossSalary,
+          pr.totalDeduction,
+          pr.netSalary,
+          pr.totalLateMinutes
+        ]);
+        grandDeductions += pr.totalDeduction;
+      }
+      
+      const totalRowIdx = summaryAoA.length;
+      summaryAoA.push(["TOTALS", "", "", "", grandDeductions, "", ""]);
+
+      const wsSummary = XLSX.utils.aoa_to_sheet(summaryAoA);
+      wsSummary["!cols"] = [
+        { wch: 25 }, { wch: 15 }, { wch: 15 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }
+      ];
+
+      const STYLE_HEADER_DARK = {
+        fill: { fgColor: { rgb: "2C2C2A" } },
+        font: { bold: true, color: { rgb: "FFFFFF" } },
+        alignment: { horizontal: "center", vertical: "center" },
+      };
+
+      for (let c = 0; c < 7; c++) {
+        wsSummary[XLSX.utils.encode_cell({ r: 1, c })] = wsSummary[XLSX.utils.encode_cell({ r: 1, c })] || {t: 's', v: ''};
+        wsSummary[XLSX.utils.encode_cell({ r: 1, c })].s = STYLE_HEADER_DARK;
+      }
+      
+      wsSummary[XLSX.utils.encode_cell({ r: totalRowIdx, c: 0 })] = wsSummary[XLSX.utils.encode_cell({ r: totalRowIdx, c: 0 })] || {t:'s',v:''};
+      wsSummary[XLSX.utils.encode_cell({ r: totalRowIdx, c: 0 })].s = { font: { bold: true } };
+      wsSummary[XLSX.utils.encode_cell({ r: totalRowIdx, c: 4 })] = wsSummary[XLSX.utils.encode_cell({ r: totalRowIdx, c: 4 })] || {t:'n',v:''};
+      wsSummary[XLSX.utils.encode_cell({ r: totalRowIdx, c: 4 })].s = { font: { bold: true } };
+
+      XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+
+      // Sheet 2+: Individuals
+      for (const pr of processedResults) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const empAoA: any[][] = [];
+        empAoA.push(["Date", "Sched. IN", "Actual IN", "Actual OUT", "Late (min)", "Deduction (SAR)", "Status"]);
+        
+        for (const row of pr.rows) {
+           let statusText = "On Time";
+           if (row.dayOff) statusText = "Day Off";
+           else if (row.absent) statusText = "Absent";
+           else if (row.lateMinutes! > 0) statusText = `Late ${row.lateMinutes} min`;
+
+           empAoA.push([
+             row.date, row.scheduledIn, row.actualIn, row.actualOut, 
+             row.lateMinutes ?? 0, row.deduction, statusText
+           ]);
+        }
+        
+        const wsEmp = XLSX.utils.aoa_to_sheet(empAoA);
+        wsEmp["!cols"] = [
+          { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 15 }
+        ];
+
+        for (let c = 0; c < 7; c++) {
+           wsEmp[XLSX.utils.encode_cell({ r: 0, c })] = wsEmp[XLSX.utils.encode_cell({ r: 0, c })] || {t:'s',v:''};
+           wsEmp[XLSX.utils.encode_cell({ r: 0, c })].s = { font: { bold: true } };
+        }
+
+        const STYLE_YELLOW = { fill: { fgColor: { rgb: "FFFF00" } } };
+        const STYLE_RED = { fill: { fgColor: { rgb: "FFE4E4" } } };
+        const STYLE_AMBER = { fill: { fgColor: { rgb: "FFF3CD" } } };
+
+        for (let r = 1; r <= pr.rows.length; r++) {
+           const rowObj = pr.rows[r - 1];
+           let sObj = null;
+           if (rowObj.dayOff) sObj = STYLE_YELLOW;
+           else if (rowObj.absent) sObj = STYLE_RED;
+           else if (rowObj.lateMinutes! > 0) sObj = STYLE_AMBER;
+
+           if (sObj) {
+              for (let c = 0; c < 7; c++) {
+                 const cellRef = XLSX.utils.encode_cell({ r, c });
+                 if (!wsEmp[cellRef]) wsEmp[cellRef] = {v:'', t:'s'};
+                 wsEmp[cellRef].s = sObj;
+              }
+           }
+        }
+        
+        const firstName = pr.employee.name.split(" ")[0].substring(0, 30);
+        XLSX.utils.book_append_sheet(wb, wsEmp, firstName);
+      }
+
+      let monthYearStr = "Report";
+      if (processedResults[0].rows.length > 0) {
+        const dtPart = processedResults[0].rows[0].date.split("-"); 
+        if (dtPart.length === 3) {
+          const mNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          const midx = parseInt(dtPart[1], 10) - 1;
+          const yFull = dtPart[2].length === 2 ? "20" + dtPart[2] : dtPart[2];
+          monthYearStr = `${mNames[midx]}${yFull}`;
+        }
+      }
+
+      const fileName = `KayanAlNazer_Salary_${monthYearStr}.xlsx`;
+      
+      const zipBase64 = XLSX.write(wb, { bookType: "xlsx", type: "base64" });
+      const a = document.createElement("a");
+      a.href = "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + zipBase64;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      setSalaryStatus({ type: "success", message: `Salary report downloaded — ${processedResults.length} employees included.` });
+
+    } catch (error) {
+      console.error(error);
+      setSalaryStatus({ type: "error", message: "Failed to generate export file." });
+    }
+  }
+
   async function handleGenerate() {
     const [, , dayStr] = startDate.split("-");
     if (parseInt(dayStr, 10) !== 21) {
@@ -454,6 +894,7 @@ export default function Home() {
       "Name,EmployeeID,Branch,Department,DutyTime,OffDay,Email",
       "Ahmed Al Ghamdi,1097990590,SHAWQIA,FRONT OFFICE,4:30pm to 12:30am,Tuesday,ahmed@example.com",
       "Sara Al Zahrani,1097990591,MALAZ,CASHIER,9:00am to 6:00pm,Friday,sara@example.com",
+      "Khalid Al Otaibi,1097990592,SHAWQIA,MANAGER,9:00am to 6:00pm,Friday & Saturday,khalid@example.com",
     ].join("\n");
 
     const blob = new Blob([sampleCSV], { type: "text/csv;charset=utf-8;" });
@@ -517,9 +958,28 @@ export default function Home() {
             <p className="subtitle">Kayan Sweets — Shift Schedule Generator</p>
           </div>
 
-          {/* ── File Upload ── */}
-          <div className="formGroup">
-            <label className="label" htmlFor="csv-upload">Upload Employee List (.csv)</label>
+          {/* ── Tabs ── */}
+          <div className="tabsContainer">
+            <button
+              className={`tabButton ${activeTab === "generate" ? "active" : ""}`}
+              onClick={() => setActiveTab("generate")}
+            >
+              Generate Schedules
+            </button>
+            <button
+              className={`tabButton ${activeTab === "salary" ? "active" : ""}`}
+              onClick={() => setActiveTab("salary")}
+            >
+              Salary Calculator
+            </button>
+          </div>
+
+          {/* ── Tab Content: Generate Schedules ── */}
+          {activeTab === "generate" && (
+            <div className="tabContent">
+              {/* ── File Upload ── */}
+              <div className="formGroup">
+                <label className="label" htmlFor="csv-upload">Upload Employee List (.csv)</label>
             <div className="fileInputWrapper">
               <input
                 ref={fileInputRef}
@@ -661,6 +1121,240 @@ export default function Home() {
             <span className={`statusDot ${status.type === "idle" ? "" : status.type}`} />
             <span className="statusText">{status.message}</span>
           </div>
+            </div>
+          )}
+
+          {/* ── Tab Content: Salary Calculator ── */}
+          {activeTab === "salary" && (
+            <div className="tabContent">
+              <div className="sectionHeader">
+                <h2 className="sectionTitle">Salary Calculator</h2>
+                <p className="sectionSubtitle">
+                  Upload a filled attendance sheet photo to extract times and calculate salary
+                </p>
+              </div>
+
+              {/* ── Processed Employees Map ── */}
+              {processedResults.length > 0 && (
+                <div className="processedListWrapper">
+                  <h3 className="sectionSubtitle" style={{ marginBottom: "0.5rem", color: "#f5f5f5" }}>Processed Employees</h3>
+                  {processedResults.map((pr, i) => (
+                    <div 
+                      key={i} 
+                      className={`processedListItem ${currentResult?.employee.employeeId === pr.employee.employeeId ? "active" : ""}`}
+                      onClick={() => {
+                        setSalaryEmployeeId(pr.employee.employeeId);
+                        setExtractedRows(pr.rows);
+                        setCurrentResult(pr);
+                        setAttendanceImage(null);
+                        setAttendancePreviewUrl("");
+                        setSalaryStatus({ type: "idle", message: "Viewing cached results." });
+                      }}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="checkIcon">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                      </svg>
+                      <span className="processedName">{pr.employee.name}</span>
+                      <span className="processedNet">— Net: SAR {pr.netSalary.toFixed(2)}</span>
+                    </div>
+                  ))}
+                  
+                  <button 
+                     className="processAnotherBtn mt-2" 
+                     onClick={() => {
+                        setSalaryEmployeeId("");
+                        setExtractedRows([]);
+                        setCurrentResult(null);
+                        setAttendanceImage(null);
+                        setAttendancePreviewUrl("");
+                        setSalaryStatus({ type: "idle", message: "Ready for next employee." });
+                     }}
+                  >
+                    Process Another Employee
+                  </button>
+                </div>
+              )}
+
+              {/* ── Employee Selector ── */}
+              <div className="formGroup">
+                <label className="label" htmlFor="employee-select">Select Employee</label>
+                {employees.length === 0 ? (
+                  <div className="noticeBanner">
+                    Load your employee CSV in the Generate tab first
+                  </div>
+                ) : (
+                  <select
+                    id="employee-select"
+                    className="selectInput"
+                    value={salaryEmployeeId}
+                    onChange={(e) => setSalaryEmployeeId(e.target.value)}
+                  >
+                    <option value="">-- Select Employee --</option>
+                    {employees.map((emp, i) => (
+                      <option key={i} value={emp.employeeId}>
+                        {emp.name} ({emp.branch})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* ── Image Upload ── */}
+              <div className="formGroup">
+                <label className="label" htmlFor="photo-upload">Upload Filled Attendance Sheet Photo</label>
+                <div className="fileInputWrapper">
+                  <input
+                    id="photo-upload"
+                    type="file"
+                    accept="image/jpeg, image/png, image/webp"
+                    onChange={handleImageChange}
+                  />
+                  <div className="fileInputIcon">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                    </svg>
+                  </div>
+                  <p className="fileInputText">
+                    {attendanceImage ? (
+                      <><strong>{attendanceImage.name}</strong> selected</>
+                    ) : (
+                      <><strong>Click to upload</strong> or drag &amp; drop</>
+                    )}
+                  </p>
+                  <p className="fileInputHint">.jpg, .png, .webp only</p>
+                </div>
+                {attendancePreviewUrl && (
+                  <div className="imagePreview">
+                    <img src={attendancePreviewUrl} alt="Preview" />
+                  </div>
+                )}
+              </div>
+
+              {/* ── Results Container ── */}
+              {currentResult && (
+                <>
+                  <div className="tableWrapper mt-4" style={{ marginTop: '1.5rem', marginBottom: '1.5rem' }}>
+                    <table className="previewTable extractedTable">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Sched. IN</th>
+                          <th>Actual IN</th>
+                          <th>Actual OUT</th>
+                          <th>Late (min)</th>
+                          <th>Deduction (SAR)</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentResult.rows.map((row: any, idx: number) => {
+                          let rowClass = "row-ontime";
+                          let statusText = "On Time";
+                          
+                          if (row.dayOff) {
+                            rowClass = "row-dayoff";
+                            statusText = "Day Off";
+                          } else if (row.absent) {
+                            rowClass = "row-absent";
+                            statusText = "Absent";
+                          } else if (row.lateMinutes > 0) {
+                            rowClass = "row-late";
+                            statusText = `Late ${row.lateMinutes} min`;
+                          }
+                          
+                          return (
+                            <tr key={idx} className={rowClass}>
+                              <td>{row.date}</td>
+                              <td>{row.scheduledIn}</td>
+                              <td>
+                                <div
+                                  contentEditable={!row.dayOff && !row.absent}
+                                  suppressContentEditableWarning={true}
+                                  onBlur={(e) => handleRowEdit(idx, "actualIn", e.currentTarget.textContent || "")}
+                                  className={!row.dayOff && !row.absent ? "editableCell" : ""}
+                                >
+                                  {row.actualIn}
+                                </div>
+                              </td>
+                              <td>
+                                <div
+                                  contentEditable={!row.dayOff && !row.absent}
+                                  suppressContentEditableWarning={true}
+                                  onBlur={(e) => handleRowEdit(idx, "actualOut", e.currentTarget.textContent || "")}
+                                  className={!row.dayOff && !row.absent ? "editableCell" : ""}
+                                >
+                                  {row.actualOut}
+                                </div>
+                              </td>
+                              <td>{row.lateMinutes ?? 0}</td>
+                              <td>{row.deduction.toFixed(2)}</td>
+                              <td className="status-cell">{statusText}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="salarySummaryBox">
+                    <div className="summaryItem">
+                      <span className="summaryLabel">Gross</span>
+                      <span className="summaryValue">SAR {currentResult.grossSalary.toFixed(2)}</span>
+                    </div>
+                    <div className="summaryDivider" />
+                    <div className="summaryItem">
+                      <span className="summaryLabel">Deductions</span>
+                      <span className="summaryValue deduction">SAR {currentResult.totalDeduction.toFixed(2)}</span>
+                    </div>
+                    <div className="summaryDivider" />
+                    <div className="summaryItem">
+                      <span className="summaryLabel">Net</span>
+                      <span className="summaryValue net">SAR {currentResult.netSalary.toFixed(2)}</span>
+                    </div>
+                  </div>
+                  
+                  {(() => {
+                     const avgShiftHours = currentResult.grossSalary / 30 / currentResult.hourlyRate;
+                     return (
+                        <p className="hourlyRateNote">
+                          Hourly rate used: SAR {currentResult.hourlyRate.toFixed(2)} 
+                          (Salary ÷ 30 days ÷ {Math.round(avgShiftHours * 10) / 10} shift hours)
+                        </p>
+                     );
+                  })()}
+                </>
+              )}
+
+              {/* ── Actions ── */}
+              <button
+                className={`generateBtn ${readingImage ? "generating" : ""}`}
+                disabled={!salaryEmployeeId || !attendanceImage || readingImage}
+                onClick={handleReadSheet}
+              >
+                {readingImage ? (
+                  <>
+                    <span className="spinner" />
+                    Reading...
+                  </>
+                ) : (
+                  "Read Sheet with AI"
+                )}
+              </button>
+              <button
+                className="generateBtn"
+                disabled={processedResults.length === 0}
+                onClick={handleExportSalaryReport}
+                style={{ marginTop: "0.5rem" }}
+              >
+                Export Salary Report
+              </button>
+              
+              <div className="statusArea" style={{ marginTop: "1rem" }}>
+                <span className={`statusDot ${salaryStatus.type === "idle" ? "" : salaryStatus.type}`} />
+                <span className="statusText">{salaryStatus.message}</span>
+              </div>
+            </div>
+          )}
         </div>
       </main>
 

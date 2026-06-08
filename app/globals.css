@@ -660,6 +660,286 @@ body {
   height: 13px;
 }
 
+/* ── Tabs ── */
+.tabsContainer {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid #333;
+  padding-bottom: 0.5rem;
+}
+
+.tabButton {
+  background: none;
+  border: none;
+  padding: 0.5rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #888;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.tabButton:hover {
+  color: #f5f5f5;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tabButton.active {
+  color: #111;
+  background: linear-gradient(135deg, #d4af37, #b8860b);
+}
+
+/* ── Section Header ── */
+.sectionHeader {
+  margin-bottom: 1.5rem;
+}
+
+.sectionTitle {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f5f5f5;
+  margin-bottom: 0.25rem;
+}
+
+.sectionSubtitle {
+  font-size: 0.85rem;
+  color: #9ca3af;
+}
+
+/* ── Select Input ── */
+.selectInput {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1.5px solid #444;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: #f5f5f5;
+  background: #252525;
+  outline: none;
+  appearance: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  cursor: pointer;
+}
+
+.selectInput:focus {
+  border-color: #d4af37;
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.15);
+}
+
+/* ── Notice Banner ── */
+.noticeBanner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 10px;
+  color: #fbbf24;
+  font-size: 0.825rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* ── Image Preview ── */
+.imagePreview {
+  margin-top: 1rem;
+  width: 100%;
+  max-width: 200px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #333;
+}
+
+.imagePreview img {
+  width: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+/* ── Salary Table Rows ── */
+.extractedTable td {
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.row-dayoff td {
+  background-color: #FFFF00 !important;
+  color: #111 !important;
+}
+
+.row-absent td {
+  background-color: #FFE4E4 !important;
+  color: #111 !important;
+}
+
+.row-late td {
+  background-color: #FFF3CD !important;
+  color: #111 !important;
+}
+
+.row-ontime td {
+  background-color: #ffffff !important;
+  color: #111 !important;
+}
+
+.row-dayoff td.status-cell {
+  color: #111 !important;
+}
+
+.row-absent td.status-cell {
+  color: #dc2626 !important;
+  font-weight: bold;
+}
+
+.row-late td.status-cell {
+  color: #b45309 !important;
+  font-weight: bold;
+}
+
+.row-ontime td.status-cell {
+  color: #10b981 !important;
+  font-weight: bold;
+}
+
+.editableCell {
+  border-bottom: 1.5px dashed #888;
+  padding-bottom: 2px;
+  outline: none;
+  min-width: 40px;
+  display: inline-block;
+  cursor: text;
+}
+
+.editableCell:focus {
+  border-bottom-color: #111;
+  background: rgba(0,0,0,0.05);
+}
+
+/* ── Salary Summary ── */
+.salarySummaryBox {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid #444;
+  border-radius: 10px;
+  background: #252525;
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: center;
+}
+
+.summaryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.summaryLabel {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.summaryValue {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #f5f5f5;
+}
+
+.summaryValue.deduction {
+  color: #ef4444;
+}
+
+.summaryValue.net {
+  color: #10b981;
+}
+
+.summaryDivider {
+  width: 1px;
+  height: 40px;
+  background: #444;
+}
+
+.hourlyRateNote {
+  font-size: 0.75rem;
+  color: #6b7280;
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Processed List ── */
+.processedListWrapper {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: rgba(16, 185, 129, 0.05); /* light emerald */
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 10px;
+}
+
+.processedListItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: #252525;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.processedListItem:hover {
+  background: #2a2a2a;
+}
+
+.processedListItem.active {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.checkIcon {
+  width: 18px;
+  height: 18px;
+  color: #10b981;
+  flex-shrink: 0;
+}
+
+.processedName {
+  font-weight: 600;
+  color: #f5f5f5;
+  font-size: 0.9rem;
+}
+
+.processedNet {
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+.processAnotherBtn {
+  background: transparent;
+  border: 1.5px solid #10b981;
+  color: #10b981;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+  margin-top: 0.5rem;
+}
+
+.processAnotherBtn:hover {
+  background: rgba(16, 185, 129, 0.1);
+}
+
 /* ── Responsive ── */
 @media (max-width: 680px) {
   .card {
