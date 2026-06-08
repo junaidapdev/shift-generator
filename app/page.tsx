@@ -296,9 +296,12 @@ declare const saveAs: any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const jspdf: any;
 
-/* ── Letterhead loader (cached once per generate run) ── */
+/* ── Letterhead loader (cached once per generate run) ──
+   JPEG (not PNG) is critical: jsPDF embeds JPEGs directly via DCTDecode,
+   keeping PDFs small. PNG would be decoded to raw RGBA and re-encoded,
+   making every PDF ~30 MB. */
 async function loadLetterheadAsBase64(): Promise<string> {
-  const res = await fetch("/kayan-letterhead.png");
+  const res = await fetch("/kayan-letterhead.jpg");
   if (!res.ok) throw new Error(`Letterhead fetch failed: ${res.status}`);
   const blob = await res.blob();
   return new Promise((resolve, reject) => {
@@ -321,10 +324,12 @@ function generatePDF(
   letterheadBase64: string
 ): string {
   const { jsPDF } = jspdf;
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  // compress: true gives a small additional savings (~10%) on PDF text streams
+  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
 
-  // Full-bleed letterhead background
-  doc.addImage(letterheadBase64, "PNG", 0, 0, 210, 297);
+  // Full-bleed letterhead background. JPEG so jsPDF embeds the source bytes
+  // directly without re-encoding — keeps PDF size near the JPEG file size.
+  doc.addImage(letterheadBase64, "JPEG", 0, 0, 210, 297);
 
   // Subtitle (centered, just below the yellow top band)
   doc.setFontSize(13);
@@ -894,7 +899,7 @@ Rules:
       setGenerating(false);
       setStatus({
         type: "error",
-        message: "Could not load letterhead image. Make sure public/kayan-letterhead.png exists.",
+        message: "Could not load letterhead image. Make sure public/kayan-letterhead.jpg exists.",
       });
       return;
     }
