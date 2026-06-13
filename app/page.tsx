@@ -296,12 +296,54 @@ declare const saveAs: any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const jspdf: any;
 
+/* ── Brand config ── */
+type BrandId = "kayan" | "frybee";
+
+interface Brand {
+  id: BrandId;
+  displayName: string;
+  subtitle: string;
+  letterheadPath: string;
+  zipPrefix: string;
+  salaryPrefix: string;
+  footerLabel: string;
+  // Vertical offsets (mm) inside the PDF, tuned per letterhead so the
+  // subtitle + metadata block clear the top branding band.
+  pdfSubtitleY: number;
+  pdfMetaStartY: number;
+}
+
+const BRANDS: Record<BrandId, Brand> = {
+  kayan: {
+    id: "kayan",
+    displayName: "Kayan Sweets",
+    subtitle: "Kayan Sweets — Shift Schedule Generator",
+    letterheadPath: "/kayan-letterhead.jpg",
+    zipPrefix: "KayanSweets_Schedules",
+    salaryPrefix: "KayanAlNazer_Salary",
+    footerLabel: "ShiftGen · Internal HR Tool · Kayan Sweets",
+    pdfSubtitleY: 40,
+    pdfMetaStartY: 52,
+  },
+  frybee: {
+    id: "frybee",
+    displayName: "Frybee",
+    subtitle: "Frybee — Shift Schedule Generator",
+    letterheadPath: "/frybee-letterhead.jpg",
+    zipPrefix: "Frybee_Schedules",
+    salaryPrefix: "Frybee_Salary",
+    footerLabel: "ShiftGen · Internal HR Tool · Frybee",
+    pdfSubtitleY: 52,
+    pdfMetaStartY: 64,
+  },
+};
+
 /* ── Letterhead loader (cached once per generate run) ──
    JPEG (not PNG) is critical: jsPDF embeds JPEGs directly via DCTDecode,
    keeping PDFs small. PNG would be decoded to raw RGBA and re-encoded,
    making every PDF ~30 MB. */
-async function loadLetterheadAsBase64(): Promise<string> {
-  const res = await fetch("/kayan-letterhead.jpg");
+async function loadLetterheadAsBase64(letterheadPath: string): Promise<string> {
+  const res = await fetch(letterheadPath);
   if (!res.ok) throw new Error(`Letterhead fetch failed: ${res.status}`);
   const blob = await res.blob();
   return new Promise((resolve, reject) => {
@@ -321,7 +363,8 @@ function generatePDF(
   dateRange: DateEntry[],
   monthName: string,
   year: number,
-  letterheadBase64: string
+  letterheadBase64: string,
+  brand: Brand
 ): string {
   const { jsPDF } = jspdf;
   // compress: true gives a small additional savings (~10%) on PDF text streams
@@ -338,7 +381,7 @@ function generatePDF(
   doc.text(
     `Employee Time Schedule — ${monthName} ${year}`,
     105,
-    40,
+    brand.pdfSubtitleY,
     { align: "center" }
   );
 
@@ -347,7 +390,7 @@ function generatePDF(
   const metaLeftValueX = 42;
   const metaRightLabelX = 115;
   const metaRightValueX = 152;
-  let metaY = 52;
+  let metaY = brand.pdfMetaStartY;
 
   const drawMetaRow = (
     label1: string, value1: string,
@@ -438,10 +481,23 @@ export default function Home() {
   const [authError, setAuthError] = useState(false);
   const [authShake, setAuthShake] = useState(false);
 
+  /* ── Brand state ── */
+  const [brandId, setBrandId] = useState<BrandId>("kayan");
+  const brand = BRANDS[brandId];
+
   useEffect(() => {
     setAuthed(localStorage.getItem("shiftgen_auth") === "true");
+    const savedBrand = localStorage.getItem("shiftgen_brand");
+    if (savedBrand === "kayan" || savedBrand === "frybee") {
+      setBrandId(savedBrand);
+    }
     setAuthChecked(true);
   }, []);
+
+  function handleBrandChange(next: BrandId) {
+    setBrandId(next);
+    localStorage.setItem("shiftgen_brand", next);
+  }
 
   function handleLogin() {
     if (password === AUTH_PASSWORD) {
@@ -857,7 +913,7 @@ Rules:
         }
       }
 
-      const fileName = `KayanAlNazer_Salary_${monthYearStr}.xlsx`;
+      const fileName = `${brand.salaryPrefix}_${monthYearStr}.xlsx`;
       
       const zipBase64 = XLSX.write(wb, { bookType: "xlsx", type: "base64" });
       const a = document.createElement("a");
@@ -890,16 +946,16 @@ Rules:
     setGenerating(true);
     setStatus({ type: "active", message: "Loading letterhead..." });
 
-    // Load the Kayan Al-Nasser letterhead once — reused as the background for every PDF
+    // Load the brand letterhead once — reused as the background for every PDF
     let letterheadBase64: string;
     try {
-      letterheadBase64 = await loadLetterheadAsBase64();
+      letterheadBase64 = await loadLetterheadAsBase64(brand.letterheadPath);
     } catch (err) {
       console.error("Failed to load letterhead:", err);
       setGenerating(false);
       setStatus({
         type: "error",
-        message: "Could not load letterhead image. Make sure public/kayan-letterhead.jpg exists.",
+        message: `Could not load letterhead image. Make sure public${brand.letterheadPath} exists.`,
       });
       return;
     }
@@ -913,7 +969,7 @@ Rules:
     for (let i = 0; i < employees.length; i++) {
       const emp = employees[i];
       try {
-        const base64PDF = generatePDF(emp, dateRange, scheduleMonth, scheduleYear, letterheadBase64);
+        const base64PDF = generatePDF(emp, dateRange, scheduleMonth, scheduleYear, letterheadBase64, brand);
         const filename = emp.name.replace(/\s+/g, "_") + "_" + scheduleMonth + scheduleYear + ".pdf";
 
         // Tell JSZip to decode the base64 string
@@ -934,7 +990,7 @@ Rules:
       const zipBase64 = await zip.generateAsync({ type: "base64" });
       const a = document.createElement("a");
       a.href = "data:application/zip;base64," + zipBase64;
-      a.download = `KayanSweets_Schedules_${scheduleMonth}${scheduleYear}.zip`;
+      a.download = `${brand.zipPrefix}_${scheduleMonth}${scheduleYear}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -1026,7 +1082,23 @@ Rules:
               </svg>
             </div>
             <h1 className="title">ShiftGen</h1>
-            <p className="subtitle">Kayan Sweets — Shift Schedule Generator</p>
+            <p className="subtitle">{brand.subtitle}</p>
+          </div>
+
+          {/* ── Brand Switcher ── */}
+          <div className="brandSwitcher" role="tablist" aria-label="Brand">
+            {(Object.values(BRANDS)).map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                role="tab"
+                aria-selected={brandId === b.id}
+                className={`brandPill ${brandId === b.id ? "active" : ""}`}
+                onClick={() => handleBrandChange(b.id)}
+              >
+                {b.displayName}
+              </button>
+            ))}
           </div>
 
           {/* ── Tabs ── */}
@@ -1431,7 +1503,7 @@ Rules:
 
       {/* ── Footer ── */}
       <footer className="footer">
-        <span>ShiftGen · Internal HR Tool · Kayan Sweets</span>
+        <span>{brand.footerLabel}</span>
         <button className="lockLink" onClick={handleLock} title="Lock &amp; sign out">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
