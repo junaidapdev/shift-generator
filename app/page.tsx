@@ -308,9 +308,11 @@ interface Brand {
   salaryPrefix: string;
   footerLabel: string;
   // Vertical offsets (mm) inside the PDF, tuned per letterhead so the
-  // subtitle + metadata block clear the top branding band.
+  // subtitle + metadata block clear the top branding band, and the
+  // table doesn't collide with the footer band.
   pdfSubtitleY: number;
   pdfMetaStartY: number;
+  pdfBottomMargin: number;
 }
 
 const BRANDS: Record<BrandId, Brand> = {
@@ -324,6 +326,7 @@ const BRANDS: Record<BrandId, Brand> = {
     footerLabel: "ShiftGen · Internal HR Tool · Kayan Sweets",
     pdfSubtitleY: 40,
     pdfMetaStartY: 52,
+    pdfBottomMargin: 30,
   },
   frybee: {
     id: "frybee",
@@ -335,6 +338,7 @@ const BRANDS: Record<BrandId, Brand> = {
     footerLabel: "ShiftGen · Internal HR Tool · Frybee",
     pdfSubtitleY: 52,
     pdfMetaStartY: 64,
+    pdfBottomMargin: 20,
   },
 };
 
@@ -448,7 +452,7 @@ function generatePDF(
       4: { cellWidth: 40 },
       5: { cellWidth: 34 },
     },
-    margin: { left: 15, right: 15, bottom: 30 },
+    margin: { left: 15, right: 15, bottom: brand.pdfBottomMargin },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didParseCell: (data: any) => {
       if (data.section !== "body") return;
